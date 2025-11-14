@@ -1,0 +1,75 @@
+version: "3.9"
+
+services:
+  db:
+    image: mariadb:11.4
+    container_name: wp_db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - MARIADB_DATABASE=${MYSQL_DATABASE}
+      - MARIADB_USER=${MYSQL_USER}
+      - MARIADB_PASSWORD=${MYSQL_PASSWORD}
+      - MARIADB_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - ./shared/db:/var/lib/mysql
+      - ./shared/wordpress:/var/www/html
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -u root -p$$MARIADB_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - wpnet
+
+  php:
+    build:
+      context: ./php
+    container_name: php
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./shared/wordpress:/var/www/html
+      - ./shared/php:/usr/local/etc/php-fpm.d
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - wpnet
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: wp_nginx
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./shared/wordpress:/var/www/html:ro
+      - ./shared/nginx:/etc/nginx/conf.d:ro
+    depends_on:
+      - php
+    networks:
+      - wpnet
+
+  wp-setup:
+    image: alpine:3.20
+    volumes:
+      - ./shared/wordpress:/var/www/html
+    entrypoint: ["/bin/sh","-c"]
+    command: >
+      'set -e;
+       if [ ! -e /var/www/html/wp-settings.php ]; then
+         apk add --no-cache curl tar;
+         curl -sSL https://wordpress.org/latest.tar.gz -o /tmp/wp.tgz;
+         tar -xzf /tmp/wp.tgz -C /tmp;
+         cp -R /tmp/wordpress/* /var/www/html/;
+         chown -R  www-data:www-data /var/www/html 2>/dev/null || true;
+       else
+         echo "WordPress already present. Skipping download.";
+       fi'
+    networks:
+      - wpnet
+
+networks:
+  wpnet:
+    driver: bridge
